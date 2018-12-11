@@ -1,0 +1,654 @@
+---
+title: 'NYC Restaurant Inspections: What Do Those Letters Mean, and Do Customers Care?'
+author: "Jack Gilligan, Minsuk Kim, Nae Eoun Lee"
+date: "12/10/2018"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. Introduction
+
+### A. Group Members & Responsibilities
+
+While each group member was involved in some part with all of the analysis, visualizations, and explanations, the following outlines the tasks each group member took charge of.   
+
+**Jack Gilligan**: Write-up; report assembly and organization   
+
+**Minsuk Kim**: Yelp data scraping; interactive component   
+
+**Nae Eoun Lee**: Yelp data scraping; merging datasets; data preprocessing   
+
+### B. Background
+
+Walk by a restaurant in New York City, and you will likely see a big, blue letter posted in the window - usually a proudly displayed "A" - indicating that restaurant's most recent health and sanitation inspection grade.   
+
+Since July 2010, New York City's Department of Health and Mental Hygiene (DOHMH) has been administering these inspections, in an effort to improve the sanitation and food safety standards of eateries in the city. Every restaurant is subject to a yearly Initial Cycle Inspection, wherein an inspector notes all violations of City and State food safety regulations. The number and severity of these violations correspond to a numerical score, which determines the restaurant's initial inspection grade. The restaurant may be re-inspected in order to raise its initial grade (or for other reasons relating to regulation compliance, permits, customer complaints of poor sanitation, etc.). If it still does not earn an "A", it must display the grade it received, or instead request a hearing to have its grade changed; meanwhile it must display a "Grade Pending" card.     
+
+
+We were curious to learn about how these inspections work, and especially to know what the letter grades in restaurant windows actually mean. We found the DOHMH's Restaurant Inspection Results dataset online via NYC Open Data, documentation for which was able to answer most of our superficial questions. Preliminary analysis of the inspection results data however led to more questions, like: How frequent are citations for evidence of rodents, insects, and other pests? What is the geographical distribution of "A" versus "B" and "C" grades? Is there a correlation between a restaurant's inspection score/grade and its customer reviews? And how much does a bad inspection grade hurt business?    
+
+To begin to answer the last two questions, we would need additional customer review data to analyze alongside our inspection results data. For this, we were able scrape customer reviews data from Yelp for many of the restaurants that appear in the inspection results.  
+
+We hope that this project highlights some interesting patterns and relationships between variables in the data, begins to answer some of our bigger questions regrding the business value (cost) of good (bad)inspection grades, and provides some fun restaurant inspection facts which will certainly impress your friends when you next walk past one of those mysterious big blue letters.   
+
+Below are links to the Inspection Results dataset (which includes links to a data information document, and a data dictionary sheet), a NYC Restaurant Inspections FAQ page, some more info regarding scoring and grading, as well as the web-scraping script we used to gather Yelp data, and our final Yelp dataset:      
+
+  -**Inspection Data**: https://data.cityofnewyork.us/Health/DOHMH-New-York-City-Restaurant-Inspection-Results/43nn-pn8j
+
+  -**Inspection FAQ**: https://www1.nyc.gov/assets/doh/downloads/pdf/rii/restaurant-grading-faq.pdf
+
+  -**Inspection Scoring and Grading Info**: https://www1.nyc.gov/assets/doh/downloads/pdf/rii/how-we-score-grade.pdf
+  
+  -**Yelp Web-Scraping Script**: https://github.com/JackGilligan/NYC-Restaurant-Inspection-Analysis---EDAV-Final-Project/blob/master/yelp_scrap.py
+  
+  -**Yelp Dataset**: (https://github.com/JackGilligan/NYC-Restaurant-Inspection-Analysis---EDAV-Final-Project/blob/master/yelp_scraped_clean.csv)
+
+
+## 2. Description of Data
+
+As mentioned briefly above, our dataset is the result of a merging of restaurant inspection data and Yelp review data. 
+
+### A. Inspection Data   
+
+The restaurant inspection data is maintained by the DOHMH and updated regularly as new inspections are completed and as restaurants go out of business (inspection data for those restaurants are removed from the set). The data include results of inspections going back a maximum of three years for each restaurant. As of 11/13/2018, the date we pulled the dataset, there were inspection results recorded for 26,846 restaurants and cafeterias in NYC. The data include the following fields:   
+
+
+```{r echo=FALSE, include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(forcats)
+library(choroplethrZip)
+library(choroplethrMaps)
+library(lubridate)
+library(stringr)
+library(knitr)
+library(tidyr)
+library(jsonlite)
+library(tidyverse)
+library(gridExtra)
+```
+
+\vspace{14pt}   
+
+```{r warning=FALSE}
+Inspection_Results <- read.csv("DOHMH_New_York_City_Restaurant_Inspection_Results.csv")
+colnames(Inspection_Results)
+```
+
+\vspace{14pt}
+
+Listed below is useful additional information from the Data Dictionary for some the data fields :  
+
+ * **'CAMIS'**: Unique 10-digit restaurant ID number      
+
+ * **'DBA'**: Restaurant name ("Doing Business As")      
+
+ * **'INSPECTION.DATE'**: A 1/1/1900 Inspection Date means that the establishment has not yet been inspected     
+
+ * **'ACTION'**: Action taken by DOMHM as a response to inspection findings (e.g. "Violations were cited...", "Establishment Closed...", "Establishment Reopened...")    
+
+ * **'CRITICAL.FLAG'**: 'Critical' violations are those which are more likely to contribute to foodborne illness. Each adds a minimum of 5 points to the restaurant's inspecion 'SCORE' (see below). 'Not Critical' violations are less serious and add a minimum of 2 points to the restaurant's 'SCORE'.   
+
+ * **'SCORE'**: Number calculated based on the number and extent of violations found during the inspection. 'SCORE' is used to calculate 'GRADE' in the following way:    
+0-13 points --> "A"   
+14-27 points --> "B"   
+28 or more points --> "C"   
+
+Any restaurant earning a "C" rating will receive additional and more frequent monitoring. If severe issues persist or worsen, these restaurants may be shut down.   
+
+ * **'INSPECTION.TYPE'**: A combination of the inspection program, which is the reason for the inspection (e.g. "Cycle Inspection", "Trans Fat", "Pre-Permit") and the type of inspection performed (e.g. "Initial Inspection", "Re-inspection", "Compliance Inspection")   
+
+### B. Yelp Review Data   
+
+This data was scraped from Yelp web pages using the python code, *yelp_scrap.py*, modified from *'yelp_search.py'* on Github (https://gist.github.com/scrapehero) to run on Yelp's new UI and with python 3. By setting the two arguments of the search query as "Restaurants" and "zipcode" (using 178 NYC zipcodes for 5 boroughs, found here: https://www.health.ny.gov/statistics/cancer/registry/appendix/neighborhoods.htm), we obtained 178 separate csv files, each with between 20 - 960 results (the Yelp API only allows up to 1000 results to be returned per search).  We then combined these data files into one file *yelp_scraped_clean.csv*, with any duplicate rows removed. This final Yelp dataset contains the remaining 23,659 rows.
+
+\vspace{14pt}
+
+```{r warning=FALSE} 
+Yelp_Reviews <- read.csv("yelp_scraped_clean.csv")
+colnames(Yelp_Reviews)
+```
+
+\vspace{14pt}
+
+The variables we are interested in (other than the "business_name" and "address" fields we used to merge with the inspection data) are indicators of restaurant quality. Mainly, those are "rating" and "price_range".   
+ 
+\pagebreak
+
+  
+## 3. Data Quality   
+
+
+```{r warning=FALSE}
+extracat::visna(Inspection_Results, sort='b')
+```
+
+\vspace{14pt}
+
+The Restaurant Inspection data is a carefully maintained dataset and is generally very good. There is great documentation which includes information about the inspection process, variable definitions, when a missing or unrealistic value might be meaningful (or not), and a clear data dictionary. While there are a lot of empty values in the data, many of them are by design. For example, most of the missing 'GRADE' values reflect the fact that not all inspections are graded; some are instead to check permits or compliance with specific regulations, as we mentioned previously. The documentation admits though that there are unintended missing values due to the fact that the data set is merged from several administrative sources, as well as wrong values due to typos and illegible handwriting. However, most values seem to make sense, and typos seem to be minimal.  
+
+
+The Yelp dataset is scraped from active webpages, so for the data that we have, the quality is good; there are very few missing values, 'NA' values or values that don't make sense.     
+
+The data, however, is limited in that it only includes the average 'rating' for each restaurant, rather than each individual rating (and the rating date). While we would have liked more detailed and recent data, Yelp has enacted measures to discourage web scraping from their pages, which make it nearly impossible for us to have collected the data we wanted within in a reasonable amount of time. 
+   
+Further, the 'restaurant_name' and 'address' fields in the Yelp dataset don't always match the corresponding fields ('DBA'; 'Building', 'Street') in the Inspection data, which meant merging the two sets was difficult. Due to this issue (and the fact that closed restaurants are removed from the Inspections data, but often remain in the Yelp data), we were only able to match around 7,000 of the 23,659 restaurants in our Yelp data to restaurants in the Inspection data.   
+
+
+```{r warning=FALSE, echo=FALSE}
+for (i in 1:length(Yelp_Reviews$address)){
+  Yelp_Reviews$num[i] <- unlist(strsplit(as.character(Yelp_Reviews$address[i]), " ")[1])
+}
+```
+
+```{r warning=FALSE, echo=FALSE}
+#New Merge
+names(Inspection_Results) = tolower(names(Inspection_Results))
+names(Inspection_Results)[2] = "name"
+names(Inspection_Results)[4] = "num"
+names(Yelp_Reviews)[3] = "name"
+Inspection_Results$name = toupper(Inspection_Results$name)
+Yelp_Reviews$name <- toupper(iconv(Yelp_Reviews$name, "UTF-8", "UTF-8"))
+
+Inspection_Results$inspection.date <- as.Date(Inspection_Results$inspection.date, format="%m/%d/%Y")
+
+#nondupl1 = Inspection_Results[!duplicated(Inspection_Results[,c('name','street')]),]
+nondupl1 = Inspection_Results[!duplicated(Inspection_Results[,c('camis')]),]
+nondupl2 = Yelp_Reviews[!duplicated(Yelp_Reviews[,c('name','url')]),]
+
+Combined = merge(nondupl1, nondupl2, by = c('name', 'num'))
+
+Combined_clean_grade <- Combined[!is.na(Combined$grade) & Combined$grade!= "" ,]
+Combined_clean_rating <- Combined[!is.na(Combined$rating) & Combined$rating != "", ]
+Combined_clean_price <- Combined[!is.na(Combined$price_range) & Combined$price_range != "", ]
+```
+
+
+
+## 4. Main Analysis   
+
+We started by trying to get a sense of the overall distribution of inspection grades. The plot below shows the the results of all graded inspections in the data, by 'boro'.
+
+\vspace{14pt}
+
+```{r, warning=FALSE}
+
+Grade_by_Boro <- Inspection_Results[Inspection_Results$grade %in% c("A", "B", "C") & Inspection_Results$boro %in% c("BRONX", "BROOKLYN", "MANHATTAN", "QUEENS", "STATEN ISLAND"),] %>% group_by(boro,grade) %>% summarise(Count=n())
+
+Grade_pct_Boro <- Grade_by_Boro %>% group_by(boro) %>% 
+  mutate(countB=sum(Count)) %>% 
+  group_by(grade, add = TRUE) %>% 
+  mutate(per = paste0(round(100*Count/ countB),'%'))
+
+ggplot(Grade_pct_Boro, aes(x=boro, y=Count, fill=grade)) +
+geom_bar(stat = "identity", position=position_dodge()) +
+scale_y_continuous(labels = function(l) {paste0(l/1000, "K")})+ labs(title="Inspection Grade by Borough (11/2015 - 11/2018)", x="Borough") + geom_text(aes(label=per), position = position_dodge(width = 0.9), vjust=-0.3, size=3.5)
+```
+
+\vspace{14pt}
+
+We can see that the large majority of inspections result in "A" grades. And, taking into account that a restaurant may earn an "A" grade on either the initial inspection or the re-inspection, the percentage of restaurants actually displaying an "A" grade in any region is even higher than the numbers shown. Importantly, there does not seem to be any correlation between "boro" and "grade".   
+
+\vspace{16pt}
+
+
+We next wanted to know what kinds of violations are most commonly noted during inspections. That is, what in the world is going on in the kitchen of a "B" or "C" graded restaurant? 
+
+```{r, warning=FALSE, echo=FALSE}
+Bad_Food <- c("Canned food product observed dented and not segregated from other consumable food items.",
+"Food from unapproved or unknown source or home canned. Reduced oxygen packaged (ROP) fish not frozen before processing; or ROP foods prepared on premises transported to another site.",
+"A food containing artificial trans fat, with 0.5 grams or more of trans fat per serving, is being stored, distributed, held for service, used in preparation of a menu item, or served.",
+"Shellfish not from approved source, improperly tagged/labeled; tags not retained for 90 days.",
+"Eggs found dirty/cracked; liquid, frozen or powdered eggs not pasteurized.",
+"Canned food product observed swollen, leaking or rusted, and not segregated from other consumable food items .",
+"Unpasteurized milk or milk product present.")
+
+Certs <- c("Food Protection Certificate not held by supervisor of food operations.",
+"Current letter grade card not posted.",
+"Letter Grade or Grade Pending card not conspicuously posted and visible to passersby.",
+"HACCP plan not approved or approved HACCP plan not maintained on premises.",
+"Permit not conspicuously displayed.",
+"ROP processing equipment not approved by DOHMH.",
+"Failure to comply with an Order of the Board of Health, Commissioner, or Department.",
+"Duties of an officer of the Department interfered with or obstructed.",
+"Document issued by the Board of Health, Commissioner or Department unlawfully reproduced or altered.",
+"Records and logs not maintained to demonstrate that HACCP plan has been properly implemented.",
+"Food not labeled in accordance with HACCP plan.")
+
+Facility_Food <- c("Single service item reused, improperly stored, dispensed; not used when required.",
+"Hand washing facility not provided in or near food preparation area and toilet room. Hot and cold running water at adequate pressure to enable cleanliness of employees not provided at facility. Soap and an acceptable hand-drying device not provided.",
+"Accurate thermometer not provided in refrigerated or hot holding equipment.",
+"Appropriately scaled metal stem-type thermometer or thermocouple not provided or used to evaluate temperatures of potentially hazardous foods during cooking, cooling, reheating and holding.",
+"No facilities available to wash, rinse and sanitize utensils and/or equipment.",
+"Insufficient or no refrigerated or hot holding equipment to keep potentially hazardous foods at required temperatures.")
+
+Facility_Gen <- c("Non-food contact surface improperly constructed. Unacceptable material used. Non-food contact surface or equipment improperly maintained and/or not properly sealed, raised, spaced or movable to allow accessibility for cleaning on all sides, above and underneath the unit.",
+"Plumbing not properly installed or maintained; anti-siphonage or backflow prevention device not provided where required; equipment or floor not properly drained; sewage disposal system in disrepair or not functioning properly.",
+"Bulb not shielded or shatterproof, in areas where there is extreme heat, temperature changes, or where accidental contact may occur.",
+"Mechanical or natural ventilation system not provided, improperly installed, in disrepair and/or fails to prevent excessive build-up of grease, heat, steam condensation vapors, odors, smoke, and fumes.",
+"Toilet facility not maintained and provided with toilet paper, waste receptacle and self-closing door.",
+"Nuisance created or allowed to exist. Facility not free from unsafe, hazardous, offensive or annoying conditions.",
+"Covered garbage receptacle not provided or inadequate, except that garbage receptacle may be uncovered during active use. Garbage storage area not properly constructed or maintained; grinder or compactor dirty.",
+"Lighting inadequate; permanent lighting not provided in food preparation areas, ware washing areas, and storage rooms.",
+"Live animals other than fish in tank or service animal present in facility's food and/or non-food areas.",
+"Toilet facility not provided for employees or for patrons when required.",
+"Sewage disposal system improper or unapproved.",
+"Harmful, noxious gas or vapor detected. CO ~1 3 ppm.",
+"Toilet facility used by women does not have at least one covered garbage receptacle.",
+"Food service operation occurring in room used as living or sleeping quarters.",
+"Ashtray present in smoke-free area.",
+"Potable water supply inadequate. Water or ice not potable or from unapproved source.  Cross connection in potable water supply system observed.")
+
+Temp <- c("Cold food item held above 41Âº F (smoked fish and reduced oxygen packaged foods above 38 ÂºF) except during necessary preparation.",
+"Hot food item not held at or above 140Âº F.",
+"Food not cooled by an approved method whereby the internal product temperature is reduced from 140Âº F to 70Âº F or less within 2 hours, and from 70Âº F to 41Âº F or less within 4 additional hours.",
+"Hot food item that has been cooked and refrigerated is being held for service without first being reheated to 1 65Âº F or above within 2 hours.",
+"Food prepared from ingredients at ambient temperature not cooled to 41Âº F or below within 4 hours.",
+"Food not cooked to required minimum temperature.",
+"Precooked potentially hazardous food from commercial food processing establishment that is supposed to be heated, but is not heated to 140Âº F within 2 hours.",
+"Meat, fish or molluscan shellfish served raw or undercooked without prior notification to customer.",
+"Reduced oxygen packaged (ROP) foods not cooled by an approved method whereby the internal food temperature is reduced to 38Âº F within two hours of cooking and if necessary further cooled to a temperature of 34Âº F within six hours of reaching 38Âº F.")
+
+Other_Food <- c("Food contact surface not properly washed, rinsed and sanitized after each use and following any activity when contamination may have occurred.",
+"Food not protected from potential source of contamination during storage, preparation, transportation, display or service.",
+"Raw, cooked or prepared food is adulterated, contaminated, cross-contaminated, or not discarded in accordance with HACCP plan.",
+"Food contact surface not properly maintained.",
+"Thawing procedures improper.",
+"Food contact surface improperly constructed or located. Unacceptable material used.",
+"Toxic chemical improperly labeled, stored or used such that food contamination may occur.",
+"Food, food preparation area, food storage area, area used by employees or patrons, contaminated by sewage or liquid waste.",
+"Raw food not properly washed prior to serving.",
+"Unprotected potentially hazardous food re-served.",
+"Whole frozen poultry or poultry breasts, other than a single portion, is being cooked frozen or partially thawed.",
+"Unprotected food re-served.")
+
+Personnel <- c("Sanitized equipment or utensil, including in-use food dispensing utensil, improperly used or stored.",
+"Wiping cloths soiled or not stored in sanitizing solution.",
+"Personal cleanliness inadequate. Outer garment soiled with possible contaminant.  Effective hair restraint not worn in an area where food is prepared.",
+"Proper sanitization not provided for utensil ware washing operation.",
+"Food worker does not use proper utensil to eliminate bare hand contact with food that will not receive adequate additional heat treatment.",
+"Tobacco use, eating, or drinking from open container in food preparation, food storage or dishwashing area observed.",
+"Food worker does not wash hands thoroughly after using the toilet, coughing, sneezing, smoking, eating, preparing raw foods or otherwise contaminating hands.",
+"Food worker prepares food or handles utensil when ill with a disease transmissible by food, or have exposed infected cut or burn on hand.")
+
+Pests <- c("Facility not vermin proof. Harborage or conditions conducive to attracting vermin to the premises and/or allowing vermin to exist.",
+"Evidence of mice or live mice present in facility's food and/or non-food areas.",
+"Filth flies or food/refuse/sewage-associated (FRSA) flies present in facilitys food and/or non-food areas. Filth flies include house flies, little house flies, blow flies, bottle flies and flesh flies. Food/refuse/sewage-associated flies include fruit flies, drain flies and Phorid flies.",
+"Live roaches present in facility's food and/or non-food areas.",
+"Evidence of rats or live rats present in facility's food and/or non-food areas.")
+
+Nutrition <- c("The original nutritional fact labels and/or ingredient label for a cooking oil, shortening or margarine or food item sold in bulk, or acceptable manufacturers documentation not maintained on site.",
+"Food allergy information poster not conspicuously posted where food is being prepared or processed by food workers.",
+"Caloric content not posted on menus, menu boards or food tags, in a food service establishment that is 1 of 15 or more outlets operating the same type of business nationally under common ownership or control, or as a franchise or doing business under the same name, for each menu item that is served in portions, the size and content of which are standardized.",
+"Posted caloric content on the menu(s), menu board(s), food tag(s) or stanchions adjacent to menu boards for drive-through windows deficient, in that the size and/or font for posted calories is not as prominent as the name of the menu item or its price.",
+"Caloric content range (minimum to maximum) not posted on menus and or menu boards for each flavor, variety and size of each menu item that is offered for sale in different flavors, varieties and sizes.",
+"Food allergy information poster not posted in language understood by all food workers.",
+"Specific caloric content or range thereof not posted on menus, menu boards or food tags for each menu item offered as a combination meal with multiple options that are listed as single items.")
+
+Other_Reg <- c("Pesticide use not in accordance with label or applicable laws. Prohibited chemical used/stored. Open bait station used.",
+"''''Wash hands sign not posted at hand wash facility.",
+"Choking first aid poster not posted. Alcohol and pregnancy warning sign not posted. Resuscitation equipment: exhaled air resuscitation masks (adult & pediatric), latex gloves, sign not posted. Inspection report sign not posted.",
+"Flavored tobacco products sold or offered for sale.",
+"Notice of the Department of Board of Health mutilated, obstructed, or removed.",
+"Manufacture of frozen dessert not authorized on Food Service Establishment permit.",
+"Original label for tobacco products sold or offered for sale.")
+
+Smoking <- c("Smoke free workplace smoking policy inadequate, not posted, not provided to employees.",
+"''''No Smoking and/or 'Smoking Permitted sign not conspicuously posted. Health warning not present on 'Smoking Permitted",
+"Operator failed to make good faith effort to inform smokers of the Smoke-free Act prohibition of smoking.")
+```
+
+```{r warning=FALSE, echo=FALSE}
+Inspection_Results$Violation.Category <- 
+        ifelse(Inspection_Results$violation.description %in% Bad_Food | Inspection_Results$violation.description %in% Temp | Inspection_Results$violation.description %in% Other_Food, "Food Prep/Handling/Storage",
+        ifelse(Inspection_Results$violation.description %in% Certs | Inspection_Results$violation.description %in% Nutrition | Inspection_Results$violation.description %in% Other_Reg | Inspection_Results$violation.description %in% Smoking, "Reg. Compliance, Permits, Licenses",
+        ifelse(Inspection_Results$violation.description %in% Facility_Food | Inspection_Results$violation.description %in% Facility_Gen, "Facility Sanitation/Safety",
+        ifelse(Inspection_Results$violation.description %in% Personnel, "Personnel Sanitation/Safety",
+        ifelse(Inspection_Results$violation.description %in% Pests, "Evidence of Pests",
+        NA)))))
+```
+
+
+```{r warning=FALSE}
+Inspection_Results$critical.flag <- factor(factor(Inspection_Results$critical.flag), levels = c("Not Critical","Critical", "Not Applicable"))
+plt2 <- ggplot(Inspection_Results, aes(fct_infreq(Inspection_Results$Violation.Category)))+
+geom_bar(aes(fill = Inspection_Results$critical.flag))+
+scale_fill_manual(values = c("Yellow2","Red", "Blue"))+
+scale_y_continuous(labels = function(l) {paste0(l/1000, "K")})+
+ggtitle("Inspection Violations by Type")+
+xlab("Violation Type")+
+ylab("Count")+
+labs(fill='Critical Flag')+
+theme(axis.text.x = element_text(angle = 270, vjust = 0.45, hjust = 0))
+plt2
+```
+
+\vspace{14pt}
+
+By far, the most common 'Critical' issues relate to Food Prep/Handling/Storage. Most citations in this category are for not keeping hot foods hot and cold foods cold, not cooking meat to a proper temperature, or handling food in a manner conducive to dangerous cross-contamination.   
+
+Perhaps a bit more shocking is the number of 'Critical' issues related to Pests. Restaurants receive points in this category if an inspector finds evidence of rodents, roaches, or flies on the premises. So, that picture in your head when you imagine the kitchen that didn't pass health inspection... may not be too far off!   
+
+\vspace{16pt}
+
+Just for fun, let's see where you're most likely to be eating at a restaurant with rats, mice, or roaches (potentially) crawling around:      
+
+\vspace{14pt}
+
+```{r warning=FALSE, echo=FALSE}
+bad_zips <- as.character(c(10000, 10041, 10048, 10055, 10080, 10105, 10106, 10107, 10118, 10121, 10123, 10155, 10158, 10176, 10178, 10179, 10281, 11241, 11242, 11249))
+
+Inspection_Results_Zip <- subset(Inspection_Results, !zipcode %in% bad_zips)
+Inspection_Results_Zip <- subset(Inspection_Results_Zip, zipcode != " ")
+Inspection_Results_Zip <- subset(Inspection_Results_Zip, zipcode != "N/A")
+Inspection_Results_Zip <- subset(Inspection_Results_Zip, zipcode != "")
+```
+
+```{r warning=FALSE}
+Inspection_Results_Zip$Pest_Num <- ifelse(Inspection_Results_Zip$Violation.Category == "Evidence of Pests", 1, 0)
+Inspection_Results_Zip$Pest_Num[is.na(Inspection_Results_Zip$Pest_Num)] <- 0
+
+pct_Pest = Inspection_Results_Zip %>% group_by(Inspection_Results_Zip$zipcode) %>% summarize(Values = round(100*(sum(Pest_Num)/dplyr::n()),2))
+names(pct_Pest) <- c("region", "value")
+pct_Pest$region <- as.character(pct_Pest$region)
+
+zip_choropleth(pct_Pest, 
+               zip_zoom = pct_Pest$region, 
+               title      = "Restaurant Pest Violations by ZIP Code",
+               legend     = "% Inspections Finding Pest Issue") + coord_map()
+```
+
+
+\vspace{18pt}
+
+Still fixated on rats and roaches, we wondered whether the proportion of inspections finding evidence of pests changed season-to-season. Do rats prefer to explore the NYC dining scene in the warmer weather? Or are they more likely to take up winter residence in a heated, food-stocked kitchen?
+
+\vspace{14pt}
+
+
+```{r warning=FALSE, echo=FALSE}
+Inspection_Results$Inspection.Season <- ifelse(month(Inspection_Results$inspection.date) <= 3, "Winter",
+ifelse(month(Inspection_Results$inspection.date) <= 6, "Spring",
+ifelse(month(Inspection_Results$inspection.date) <= 9, "Summer",
+ifelse(month(Inspection_Results$inspection.date) <= 12, "Fall",
+NA))))
+
+Inspection_Results$Inspection.Season <- factor(factor(Inspection_Results$Inspection.Season), levels = c("Winter", "Spring", "Summer", "Fall"))
+
+Inspection_Results$Violation.Category <- factor(factor(Inspection_Results$Violation.Category), levels = c("Food Prep/Handling/Storage", "Evidence of Pests", "Facility Sanitation/Safety", "Personnel Sanitation/Safety", "Reg. Compliance, Permits, Licenses" ))
+```
+
+```{r warning=FALSE}
+Viol_by_Season <- Inspection_Results[Inspection_Results$Violation.Category %in% c("Food Prep/Handling/Storage", "Reg. Compliance, Permits, Licenses", "Facility Sanitation/Safety", "Personnel Sanitation/Safety", "Evidence of Pests" ) & Inspection_Results$Inspection.Season %in% c("Winter", "Spring", "Summer", "Fall"),] %>% group_by(Violation.Category,Inspection.Season) %>% summarise(Count=n())
+
+Viol_pct_Season <- Viol_by_Season %>% group_by(Violation.Category) %>% mutate(countB=sum(Count)) %>% group_by(Inspection.Season, add = TRUE) %>% mutate(per = round(100*Count/ countB))
+
+Tot_pct_Season <- Inspection_Results %>% group_by(Inspection.Season) %>% summarise(Count=n()) %>% mutate(per = paste0(round(100*Count/ nrow(Inspection_Results)),'%'))
+
+plt4 <- ggplot(Viol_pct_Season, aes( fct_infreq(Viol_pct_Season$Violation.Category), Viol_pct_Season$per))+
+geom_point(aes(color = Viol_pct_Season$Inspection.Season))+
+scale_color_manual(values=c("blue", "lightgreen", "yellow", "darkOrange"))+
+ggtitle("Violations by Type, by Season")+
+xlab("Violation Type")+
+ylab("Percentage")+
+labs(color='Season of Inspection')+
+theme(axis.text.x = element_text(angle = 270, vjust = 0.45, hjust = 0))
+plt4
+```
+
+\vspace{12pt}
+
+```{r warning=FALSE}
+Tot_pct_Season
+```
+
+\vspace{14pt}
+
+Even taking into account the fact that there are marginally more inspections taking place in the Summer than in other seasons, it looks like we can still confidently say that pests are found more often in warmer months. This raises a question of fairness with regard to the timing of inspections: Is it easier to get an "A" in the Winter than in the Summer?
+It does look possible from the plot above, but we won't pursue the question further here. 
+
+\vspace{16pt}
+
+Given the (possibly) surprising frequency of food handling and pest violations, a NYC diner would seem to be justified in wanting to avoid restaurants with a bad inspection rating. But do low inspection scores actually translate to reduced patronage or bad customer reviews?   
+
+We can hopefully get some idea by bringing in the Yelp customer reviews data.      
+First, is there any correlation between Inspection Score and Average Yelp Review Score?   
+
+\vspace{14pt}
+
+
+```{r warning=FALSE}
+
+ggplot(Combined_clean_rating)+
+geom_boxplot(aes(x=as.character(Combined_clean_rating$rating), y=Combined_clean_rating$score))+
+ggtitle("Yelp Rating vs. Inspection Score")+
+ylab("Inspection Score")+
+xlab("Avg. Yelp Rating")+
+ylim(0,75)+
+  geom_hline(yintercept=13, color="green", linetype='dashed')+
+  geom_text(aes(0.5,13,label = "A", vjust = 1.2), color='green')+
+  geom_hline(yintercept=13.5, color="yellow2" , linetype='dashed')+
+  geom_text(aes(0.5,13.5,label = "B", vjust = -0.25), color='yellow3')+
+  geom_hline(yintercept=27, color="yellow", linetype='dashed')+
+  geom_text(aes(0.5,27,label = "B", vjust = 1), color='yellow3')+
+  geom_hline(yintercept=27.5, color="red", linetype='dashed')+
+  geom_text(aes(0.5,27.5,label = "C", vjust = -0.25), color='red')
+```
+
+
+\vspace{14pt}
+
+It looks from the boxplot like there is actually greater variance toward the high end of the inspection score range among restaurants with between a 3.5 and 4.5 Yelp rating. This is misleading, however because there are a lot more restaurants with ratings in this range than with very high or very low ratings.   
+This then raises the question: Are these very high and very low Yelp ratings good indicators of a restaurant's quality? Or are a few very upset customers or proud family members able to skew the average rating due to a low number of total ratings? We will recreate the visualization above, this time removing restaurants with fewer than 30 total Yelp ratings. 
+
+\vspace{14pt}
+
+
+```{r warning=FALSE}
+G30_data <- Combined_clean_rating[Combined_clean_rating$review_count>30,]
+ggplot(G30_data)+
+geom_boxplot(aes(x=as.character(G30_data$rating), y=G30_data$score))+
+ggtitle("Yelp Rating vs. Inspection Score (>30 reviews)")+
+ylab("Inspection Score")+
+xlab("Avg. Yelp Rating")+
+ylim(0,75)+
+  geom_hline(yintercept=13, color="green", linetype='dashed')+
+  geom_text(aes(0.5,13,label = "A", vjust = 1.2), color='green')+
+  geom_hline(yintercept=13.5, color="yellow2" , linetype='dashed')+
+  geom_text(aes(0.5,13.5,label = "B", vjust = -0.25), color='yellow3')+
+  geom_hline(yintercept=27, color="yellow", linetype='dashed')+
+  geom_text(aes(0.5,27,label = "B", vjust = 1), color='yellow3')+
+  geom_hline(yintercept=27.5, color="red", linetype='dashed')+
+  geom_text(aes(0.5,27.5,label = "C", vjust = -0.25), color='red')
+```
+
+\vspace{14pt}
+
+Now, with the exception of restaurants with an average 1.5 Yelp rating (of which there are very few in the sample) and restaurants with a 5.0 rating, we see that the top quartiles (in terms of inspection score) of lower-rated restaurants generally extend deeper into the "B" grade range than those of higher-rated restaurants. While this is probably just evidence of a confounding variable, like quality of restaurant management, which is positively correlated with both Yelp rating and inspection score, it certainly doesn't disprove a causal relationship between inspection score and rating.   
+
+An interesting note is that the median inspection score for each group of the above plot is at, or very near, the cutoff for an "A" grade. This is, however, not directly related to our lingering question of the effect of inspection grade on business, so we will stay on track and take a look at the 'review_count' variable of the Yelp dataset:   
+
+\vspace{14pt}
+
+```{r warning=FALSE}
+G31_data <- G30_data[G30_data$review_count < 10000,]
+ggplot(G31_data, aes(review_count, score))+
+geom_point(shape = 1, color = "blue", alpha=0.4, size = 1) +
+ggtitle("Ratings Count vs. Inspection Score")+
+xlim(-20, 4400)+
+ylim(-5, 105)+
+ylab("Inspection Score")+
+xlab("Total Ratings (Count)")+
+  geom_hline(yintercept=13, color="green", linetype='dashed')+
+  geom_text(aes(-20,13,label = "A", vjust = 1.2), color='green')+
+  geom_hline(yintercept=13.5, color="yellow2" , linetype='dashed')+
+  geom_text(aes(-2,13.5,label = "B", vjust = -0.25), color='yellow3')+
+  geom_hline(yintercept=27, color="yellow", linetype='dashed')+
+  geom_text(aes(-20,27,label = "B", vjust = 2), color='yellow3')+
+  geom_hline(yintercept=27.5, color="red", linetype='dashed')+
+  geom_text(aes(-20,27.5,label = "C", vjust = -0.25), color='red')
+```
+
+\vspace{12pt}
+
+Again, we see a clear negative relationship between total Yelp ratings and inspection score. And while it is likely that a high inspection score (and hence a bad displayed grade) causes reduced patronage (for which total Yelp ratings is a sort of proxy), we cannot be confident of the existence or direction of causailty without more time-detailed Yelp review data. We will explain this more in the Conclusion.   
+
+\pagebreak
+
+## 5. Executive Summary 
+
+### Background   
+
+The Department of Health and Mental Hygiene (DOHMH) has been conducting regular inspections of all restaurants and cafeterias in New York City since July 2010. As part of the regular inspection cycle, an inspector will visit a given restaurant approximately yearly, unannounced, and note any violations of City and State food safety regulations. The number and severity of these violations determine a numerical score, which corresponds to a letter grade: "A", "B", or "C".   
+
+As inspections continue and grades keep appearing on restaurant windows, public awareness of the restaurant inspections, and of restaurant sanitation in general, rises. The question on every restaurant owner's mind then, is: *how bad would it be for business to receive a "B" or "C" on our next inspection?*   
+
+Knowing the potential consequences of posting a "B" or "C" inspection grade on a restaurant's public image, customer reviews, and resulting change in overall patronage would be extremely valuable. It may inform a restaurant owner's decision to hire (or not) that more experienced, but more expensive cook who is better trained on industry-standard sanitation practices; or maybe to put in that new bathroom, reserved for employees only. Should the restaurant eventually earn a bad inspection grade, this knowledge could also help the owner decide whether to request a hearing to dispute the grade, or to just bite the bullet and post it.    
+
+### Visualizations & Analysis   
+
+The first thing to look at is the specific types of sanitation infractions a bad inspection grade might imply. That is, do people have any good reason to avoid restaurants with bad inspection grades in the first place?   
+
+\vspace{14pt}
+
+```{r warning=FALSE, echo=FALSE}
+Inspection_Results$Violation.Category <- 
+        ifelse(Inspection_Results$Violation.Category == "Food Prep/Handling/Storage" , "Food",
+        ifelse(Inspection_Results$Violation.Category == "Reg. Compliance, Permits, Licenses", "Regulatory",
+        ifelse(Inspection_Results$Violation.Category == "Facility Sanitation/Safety", "Facility",
+        ifelse(Inspection_Results$Violation.Category == "Personnel Sanitation/Safety", "Personnel",
+        ifelse(Inspection_Results$Violation.Category == "Evidence of Pests", "Pests",
+        NA))))) 
+```
+
+```{r warning=FALSE}
+ES1_Data <- Inspection_Results[!is.na(Inspection_Results$Violation.Category) & Inspection_Results$critical.flag != "Not Applicable",]
+ES1_Data$critical.flag <- factor(factor(ES1_Data$critical.flag), levels = c("Not Critical","Critical"))
+ES1 <- ggplot(ES1_Data, aes(fct_infreq(ES1_Data$Violation.Category)))+
+geom_bar(aes(fill = ES1_Data$critical.flag))+
+scale_fill_manual(values = c("Yellow2","Red"))+
+scale_y_continuous(labels = function(l) {paste0(l/1000, "K")})+
+ggtitle("Inspection Violations by Type")+
+xlab("Violation Type")+
+ylab("Count")+
+labs(fill='Critical Flag')+
+theme(axis.text.x = element_text(angle = 270, vjust = 0.45, hjust = 0),
+  plot.title = element_text(size=20),
+  axis.title.x = element_text(size=14),
+  axis.title.y = element_text(size=14))
+ES1
+```
+
+\vspace{14pt}
+
+The most commonly seen violations relate to food prep and storage (keeping hot foods hot and cold foods cold; avoiding cross-contamination; etc.) and pests (i.e. rats, mice, roaches, flies, and other insects). Most people would agree that it would be perfectly reasonable to avoid a restaurant that is likely to have either of these issues, as indicated by a bad inspection grade.        
+
+\vspace{16pt}
+
+But do we have clear evidence that a bad inspection grade negatively affects the public's perception (i.e. the average Yelp rating) of a restaurant?  
+
+\vspace{14pt}
+
+```{r warning=FALSE}
+ggplot(G30_data)+
+geom_boxplot(aes(x=as.character(G30_data$rating), y=G30_data$score))+
+ggtitle("Yelp Rating vs. Inspection Score")+
+ylab("Inspection Score")+
+xlab("Avg. Yelp Rating")+
+ylim(0,75)+
+  geom_hline(yintercept=13, color="green", linetype='dashed')+
+  geom_text(aes(0.5,13,label = "A", vjust = 1.2), color='green')+
+  geom_hline(yintercept=13.5, color="yellow2" , linetype='dashed')+
+  geom_text(aes(0.5,13.5,label = "B", vjust = -0.25), color='yellow3')+
+  geom_hline(yintercept=27, color="yellow", linetype='dashed')+
+  geom_text(aes(0.5,27,label = "B", vjust = 1), color='yellow3')+
+  geom_hline(yintercept=27.5, color="red", linetype='dashed')+
+  geom_text(aes(0.5,27.5,label = "C", vjust = -0.25), color='red')+
+  theme(plot.title = element_text(size=20),
+  axis.title.x = element_text(size=14),
+  axis.title.y = element_text(size=14))
+```
+
+\vspace{14pt}
+
+As we move leftward on the plot and average Yelp rating drops, we can see that the bulk of the distribution of inspection grades moves further up into the "B" grade range. Of course, from this, we cannot say that receiving a bad inspection score necessarily leads to bad Yelp ratings and a poorer public perception, but it does show some evidence of a negative association between the two variables.    
+\vspace{12pt}
+
+While high Yelp ratings and a good public perception are important for a restaurant, what a restaurant owner is ultimately worried about is filling the building with customers. Here we use the total number of Yelp ratings at a particular restaurant as a measure of its average patronage.  
+
+\vspace{14pt}
+
+```{r warning=FALSE}
+ggplot(G31_data, aes(review_count, score))+
+geom_point(shape = 1, color = "blue", alpha=0.4, size = 1) +
+ggtitle("Ratings Count vs. Inspection Score")+
+xlim(-20, 4300)+
+ylim(-5, 105)+
+ylab("Inspection Score")+
+xlab("Total Ratings (Count)")+
+  geom_hline(yintercept=13, color="green", linetype='dashed')+
+  geom_text(aes(-20,13,label = "A", vjust = 1.2), color='green')+
+  geom_hline(yintercept=13.5, color="yellow2" , linetype='dashed')+
+  #geom_text(aes(-2,13.5,label = "B", vjust = -0.25), color='yellow3')+
+  geom_hline(yintercept=27, color="yellow", linetype='dashed')+
+  geom_text(aes(-20,27,label = "B", vjust = 2), color='yellow3')+
+  geom_hline(yintercept=27.5, color="red", linetype='dashed')+
+  geom_text(aes(-20,27.5,label = "C", vjust = -0.25), color='red')+
+  theme(plot.title = element_text(size=20),
+  axis.title.x = element_text(size=14),
+  axis.title.y = element_text(size=14))
+```
+
+\vspace{14pt}
+
+We see another general downward trend indicating a negative association between inspection score and the total number of Yelp ratings. While again, we cannot say from this that a bad inspection score will reduce the number of customers at a particular restaurant, it appears to be pretty rare for a restaurant with a "C" rating to have over 1,000 total Yelp ratings.   
+
+### Concluding Remarks   
+
+Unfortunately, we were not able to assign a cost in terms of Yelp ratings or customer visits to a bad inspection score. In order to begin to estimate those values, more detailed data would be needed to analyze Yelp ratings *before*, as compared with *after* an inspection grade was earned.   
+
+In a 2012 survey, 88% of New Yorkers indicated that health inspection results would factor into their dining decision. With increasing awareness of the inspection process and grades, we have to believe that that number is at least as high now as it was in 2012.   
+
+Given all the preceding, and although further analysis is required, it is advisable for any restaurant owner to take all reasonable measures to earn an "A" on the cycle inspection.   
+
+
+\pagebreak
+
+
+## 6. Interactive Component  
+
+The interactive shiny app linked below shows the overview of our project followed by different graphs that show the distributions of the inspection data and Yelp rating data. Selecting different categories, users can take a look at the specific bars form the graph. Our data tab shows the data used, which is the combination of the NYC Restaurant Inspection data and the Yelp scraped data used for this analysis.
+
+https://mk3474.shinyapps.io/STAT5702/   
+
+
+## 7. Conclusion  
+
+While we were able to make some headway in answering our initial questions, there were several limitations that held us back. First, and most prominently was the relatively limited Yelp reviews dataset that we were able to scrape together. The dataset included about 24,000 restaurants, only about 7,000 of which we were able to match to records in the inspection results data. Further, the Yelp dataset has only one row per restaurant, showing just the average (rounded to the nearest half-star) rating of all recorded reviews. This limited us to static analysis of average review vs. average (or most recent) inspection score.  
+
+Had we been able to get a more complete dataset (such as the Yelp Challenge Dataset, which includes all user review and business data - but only for ten cities, not including NYC), we could have done a more interesting analysis of average and number of Yelp ratings before vs. after a "B" or "C" inspection score was assigned. This would have been extremely helpful in answering our question of how much a bad inspection grade hurts a restaurant's business.   
+
+It would have also been helpful to have some data indicating the average restaurant goer's understanding of the restaurant inspection process and what inspection grades mean, as well as how much they would factor in a restaurant's inspection grade when deciding where to eat. The only information we could find on this was the study (mentioned previously) which states: "More than 91% (95% CI=88%, 94%) of New Yorkers approved of the [inspection] program and 88% (95% CI=85%, 92%) considered grades in dining decisions in 2012" (https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4330857/). It would have been great to have all the data from this survey to use in our analysis (and even better to have data from a more recent version of the survey!). If we had more time, we could have even written our own survey and polled passers-by in different parts of the city to collect this data.   
+
+In analyzing our data, we stumbled upon a few new questions to possibly explore in the future. First, we noticed some seaonality patterns in the occurrence of certain types of violations (especially pest violations), indicating perhaps that earning an "A" grade may be more difficult at certain times of year than others. For example, a restaurant earning 15 points (a "B" grade) in a July inspection might have better overall sanitary practices throughout the year than another restaurant earning 13 points (an "A" grade) in January. It would be interesting to analyze seasonal patterns in total average inspection score to see if it might make sense for the DOHMH to take the season into account when determining grades.   
+
+We also noticed a lot of inspection scores concentrated at and just below the "A" grade cutoff (13 points). We would like to research possible reasons for this pattern: Are inspectors generously fudging scores down a few points for restaurants who score just above the "A" cutoff? Could inspectors and restaurant owners be making some shady deals? Or is this a natural result of an aspect of the design of the inspection/re-inspection process that we are unaware of?   
+
+In retrospect, the dataset we have is probably better fit to analyze these questions (and others) than the main questions we addressed here - relating to the business value of inspection scores. That said, we learned a lot about the inspection process, as we set out to do, and now have a few ideas for future research projects.   
+
+ 
+
+
+
+
+
+
+
+
+
+
